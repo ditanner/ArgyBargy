@@ -1,254 +1,329 @@
-#define MODE_SETUP 1
-#define MODE_BOARD 2
-#define MODE_BOARD_READY 3
-#define MODE_PLAYER_SETUP 4
-#define MODE_PLAYER 5
-#define MODE_GAMEOVER 6
-#define MODE_RESET 7
+#include "Serial.h"
+enum signalStates {SETUP, GAME, DISPLAY_BOARD, END_ROUND, INERT, RESOLVE};
+byte signalState = INERT;
+byte gameMode = SETUP;
 
-#define MATCH_SEED 32
-#define START_RESET 40
-#define END_RESET 41
-#define NEIGHBOUR_SEED 42
+enum blinkModes {NOT_SET, CLUSTER, PLAYER};
+byte blinkMode = NOT_SET;
 
-byte mode = MODE_SETUP;
-// byte neighbours = -1;
-
-byte faceValues[] {0,1,2,3,4,5};
-
+byte faceValues[6] {0, 1, 2, 3, 4, 5};
+bool faceValuesVisible = false;
 const Color colorCycle[6] = {RED, YELLOW, GREEN, CYAN, BLUE, MAGENTA};
-/*
-const Color colorMidCycles[1] = {makeColorRGB( 255,   0,   0)};
-makeColorRGB( 255,   127,   0),
-makeColorRGB( 255,   255,   0),
-makeColorRGB( 127,   255,   0),
-makeColorRGB( 0,   255,   0),
-makeColorRGB( 0,   255,   127),
-makeColorRGB( 0,   255,   255),
-makeColorRGB( 0,   127,   255),
-makeColorRGB( 0,   0,   255),
-makeColorRGB( 127,   0,   255),
-makeColorRGB( 255,   0,   255),
-makeColorRGB( 255,   0,   127)};*/
 
+byte faceNeighbours[6] {0, 0, 0, 0, 0, 0};
 
+byte numNeighbours = 0;
+ServicePortSerial sp;
+
+byte faceMatched[6] = { 0, 0, 0, 0, 0, 0};
+
+Timer cycleTimer;
 
 void setup() {
-  // put your setup code here, to run once:
   randomize();
-  setColor(YELLOW);
-  setValueSentOnAllFaces(0);
+  sp.begin();
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  if (MODE_SETUP==mode) {
-    setColor(YELLOW);
-    bool neighboursReady = true;
-    bool singlePair = false;
-    bool setOfFour = false;
-    bool validFormation = true;
-    byte neighbours = 0;
-    byte maxNeighbours = 0;
-    FOREACH_FACE(f) {//check every face
-      if (!isValueReceivedOnFaceExpired(f)) {
-        neighbours++;
-        byte val = getLastValueReceivedOnFace(f);
-        if (NEIGHBOUR_SEED<=val) {
-          val = val - NEIGHBOUR_SEED;
-        }
-        if(validFormation && neighboursReady) {
-          if (0==val) {
-            neighboursReady = false;
-          }
-          if (0<val && singlePair) { //ie we've already seen a neighbour with 1, and this is a different neighbour
-              validFormation = false;          
-          }
-          if (1==val) {
-            singlePair = true;
-            maxNeighbours = 1;
-          }
-          if (2==val) { // 2 should be followed by a 3 and then a 2 (or preceeded by!)
-            byte nextFace = (f+1) % FACE_COUNT;
-            byte nextNextFace = (f+2) % FACE_COUNT;
-            byte prevFace = (f+5) % FACE_COUNT;
-            byte prevPrevFace = (f+4) % FACE_COUNT;
-            if(
-                (checkFaceIsValue(nextFace,3+NEIGHBOUR_SEED) && checkFaceIsValue(nextNextFace,2+NEIGHBOUR_SEED)) 
-                || (checkFaceIsValue(prevFace,3+NEIGHBOUR_SEED) && checkFaceIsValue(prevPrevFace,2+NEIGHBOUR_SEED)) 
-              ) {
-              setOfFour = true;
-              maxNeighbours = 3;
-            } else {
-              validFormation = false;
-            }
-          }
-          if (3==val && !setOfFour) {//could be middle of 2-3-2, or a 3-3
-            byte nextFace = (f+1) % FACE_COUNT;
-            byte prevFace = (f+5) % FACE_COUNT;
-            if(checkFaceIsValue(nextFace,2+NEIGHBOUR_SEED) && checkFaceIsValue(prevFace,2+NEIGHBOUR_SEED)) {
-              setOfFour = true;
-              maxNeighbours = 3;
-            } else if(checkFaceIsValue(nextFace,3+NEIGHBOUR_SEED) || checkFaceIsValue(prevFace,3+NEIGHBOUR_SEED)) {
-              setOfFour = true;
-              maxNeighbours = 2;
-            } else {
-              validFormation = false;
-            }            
-          }
-          if (3<val) {
-            validFormation = false;
-          }
-        }
-      }
+
+
+  numNeighbours = 0;
+  FOREACH_FACE(f) {
+    if (!isValueReceivedOnFaceExpired(f)) {//a neighbor!
+      numNeighbours++;
     }
-    if (maxNeighbours<neighbours) {
-      validFormation = false;
+  }
+
+  if (signalState < INERT) {
+    sendLoop();
+  } else if (INERT == signalState ) {
+    inertLoop();
+  } else if (RESOLVE == signalState) {
+    resolveLoop();
+  }
+
+  switch (gameMode) {
+    case SETUP:
+      setupLoop();
+      setupDisplayLoop();
+      break;
+    case GAME:
+      gameLoop();
+      gameDisplayLoop();
+      break;
+    case DISPLAY_BOARD:
+      displayBoardLoop();
+      gameDisplayLoop(); //for now just use game display loop
+      break;
+    case END_ROUND:
+      endRoundLoop();
+      endRoundDisplayLoop();
+      break;
+  }
+
+  //dump button data
+  buttonSingleClicked();
+  buttonDoubleClicked();
+  buttonPressed();
+
+  byte sendData = 0;
+  FOREACH_FACE(f) {
+    sendData = (signalState << 3);
+    if (SETUP == gameMode) {
+      sendData = sendData + numNeighbours;
+    } else if (DISPLAY_BOARD == gameMode && faceValuesVisible) {
+      sendData = sendData + faceValues[f];
     }
-    setValueSentOnAllFaces(neighbours + NEIGHBOUR_SEED);
-    if (validFormation && neighboursReady) {
-      setColor(GREEN);
-      if(0==neighbours) {
-        mode=MODE_PLAYER_SETUP;
+    setValueSentOnFace(sendData, f);
+  }
+}
+
+
+void inertLoop() {
+  bool sendReceived = false;
+  byte val = 0;
+  FOREACH_FACE(f) {
+    if ( !sendReceived) {
+      if (!isValueReceivedOnFaceExpired(f) ) {//a neighbor!
+        val = getSignalState(getLastValueReceivedOnFace(f));
+        if (val < INERT ) {//a neighbor saying SEND!
+          sp.print("SEND Received - moving to mode ");
+          sp.println(val);
+          switch (val) {
+            case SETUP:
+              signalState = val;
+              gameMode = val;
+              faceValuesVisible = false;
+              break;
+            case GAME:
+              changeModeToGame();
+              break;
+            case DISPLAY_BOARD:
+              if (PLAYER == blinkMode) {
+                sp.println("Acutally, this is a player piece, ignoring DISPLAY_BOARD");
+                signalState = RESOLVE;
+                return;
+              }
+              signalState = val;
+              gameMode = val;
+              faceValuesVisible = true;
+              cycleTimer.set(5000);
+              break;
+            case END_ROUND:
+              signalState = val;
+              gameMode = val;
+              faceValuesVisible = false;
+              break;
+          }
+          sendReceived = true;
+        } else {
+          if (SETUP == gameMode) {
+            faceNeighbours[f] = getPayload(getLastValueReceivedOnFace(f));
+          }
+        }
       } else {
-        mode=MODE_BOARD;
+        if (SETUP == gameMode) {
+          faceNeighbours[f] = 0;
+        }
       }
     }
   }
-  if (MODE_BOARD==mode) {
-    if (isAlone()) {
-      mode=MODE_PLAYER_SETUP;
+}
+
+void sendLoop() {
+  bool allSend = true;
+  //look for neighbors who have not heard the GO news
+  FOREACH_FACE(f) {
+    if (!isValueReceivedOnFaceExpired(f)) {//a neighbor!
+      if (getSignalState(getLastValueReceivedOnFace(f)) == INERT) {//This neighbor doesn't know it's SEND time. Stay in SEND
+        allSend = false;
+      }
+    }
+  }
+  if (allSend) {
+    sp.println("All Resolve");
+    signalState = RESOLVE;
+  }
+}
+
+void resolveLoop() {
+  bool allResolve = true;
+
+  //look for neighbors who have not moved to RESOLVE
+  FOREACH_FACE(f) {
+    if (!isValueReceivedOnFaceExpired(f)) {//a neighbor!
+      if (getSignalState(getLastValueReceivedOnFace(f)) < INERT) {//This neighbor isn't in RESOLVE. Stay in RESOLVE
+        allResolve = false;
+      }
+    }
+  }
+  if (allResolve) {
+    sp.println("All INERT");
+    signalState = INERT;
+  }
+}
+
+void setupLoop() {
+
+  if (numNeighbours > 1) {
+    blinkMode = CLUSTER;
+  } else {
+    blinkMode = PLAYER;
+  }
+
+  if (buttonDoubleClicked()) {
+    changeModeToGame();
+  }
+
+}
+
+void changeModeToGame() {
+  signalState = GAME;
+  gameMode = GAME;
+  for (byte i = 0; i < 6; i++) {
+    faceMatched[i] = 0;
+    faceValues[i]=i;
+  }
+  if (PLAYER == blinkMode) {
+    faceValuesVisible = true;   
+  } else {
+    shuffleArray(faceValues, sizeof(faceValues));
+    faceValuesVisible = false;
+  }
+}
+
+void gameLoop() {
+  if (buttonDoubleClicked()) {
+    if ( PLAYER == blinkMode || faceValuesVisible) {
+      signalState = SETUP;
+      gameMode = SETUP;
     } else {
-      if(buttonSingleClicked()) {
-        setupBoard();
-      } else {
-        bool neighbourSetup = false;
-        FOREACH_FACE(f) {
-          if (!isValueReceivedOnFaceExpired(f)) {
-            byte val = getLastValueReceivedOnFace(f);
-            if (val>=MATCH_SEED && val<MATCH_SEED+FACE_COUNT) {
-              neighbourSetup = true;
-            }
-          }
-        }
-        if (neighbourSetup) {
-          setupBoard();
-        }
-      }
-    }    
-  }
-  if (MODE_PLAYER_SETUP==mode) {
-//    setColor(BLUE);
-    if (buttonSingleClicked()) {
-      shuffleArray(faceValues); //random for now
-      drawValuesOnFaces(faceValues);
+      signalState = DISPLAY_BOARD;
+//      if (CLUSTER == blinkMode) {
+        gameMode = DISPLAY_BOARD;
+//      }
+      cycleTimer.set(5000);
+      faceValuesVisible = true;
     }
-    //protoype
-    byte matches = 0;
-    byte firstMatch = -1;
-    byte secondMatch = -1;
-    bool failed = false;
+  } else if (GAME == gameMode && PLAYER == blinkMode) {
+
+    byte foundFaces = 0;
+    byte wrongFaces = 0;
+    byte faceVal = 0;
     FOREACH_FACE(f) {
       if (!isValueReceivedOnFaceExpired(f)) {
-        byte val = getLastValueReceivedOnFace(f);
-        if (MATCH_SEED + faceValues[f] == val) {
-          matches++;
-        } else if (val>=MATCH_SEED && val<MATCH_SEED+FACE_COUNT) {
-          failed = true;
-        } else if (val>=START_RESET) {
-          mode = MODE_SETUP;
-          return;
+        faceVal = getPayload(getLastValueReceivedOnFace(f));
+        if (faceVal == faceValues[f]) {
+          faceMatched[f] = 1;
+          foundFaces++;
+        } else {
+          faceMatched[f] = 2;
+          wrongFaces++;
         }
-        
+      } else {
+        faceMatched[f] = 0;
       }
     }
-    if (2==matches && !failed) {
-      mode=MODE_GAMEOVER;
-      FOREACH_FACE(f) {
-        if (isValueReceivedOnFaceExpired(f)) {
-          setColorOnFace(GREEN, f);
-        } else {
-          setValueSentOnFace(0,f);
-        }
-      }
+    if (2 == foundFaces && 0 == wrongFaces) {
+      signalState = END_ROUND;
+      gameMode = END_ROUND;
     }
-    if (failed || 1==matches) {
-      mode=MODE_GAMEOVER;
-      FOREACH_FACE(f) {
-        if (isValueReceivedOnFaceExpired(f)) {
-          setColorOnFace(RED, f);
-        } else {
-          setValueSentOnFace(0,f);
-        }
-      }      
-    }
+
   }
-  if (MODE_GAMEOVER==mode || MODE_BOARD_READY==mode) {
-    if (buttonSingleClicked()) {
-      //discard
-    }
-    if (buttonDoubleClicked()) {
-      setValueSentOnAllFaces(START_RESET);
+}
+
+void displayBoardLoop() {
+  if (buttonDoubleClicked()) {
+    signalState = SETUP;
+    gameMode = SETUP;
+  } else if (cycleTimer.isExpired()) {
+    shuffleArray(faceValues, sizeof(faceValues));
+    cycleTimer.set(5000);
+  } 
+}
+void endRoundLoop() {
+  if (buttonDoubleClicked()) {
+    signalState = SETUP;
+    gameMode = SETUP;
+  }
+}
+
+void shuffleArray(byte arr[], size_t sizeArr) {
+
+  for (int i = 0; i < sizeArr; i++)
+  {
+    int j = random(sizeArr - 1);
+    byte t = arr[i];
+    arr[i] = arr[j];
+    arr[j] = t;
+  }
+}
+
+
+
+byte getSignalState(byte data) {
+  return ((data >> 3) );
+}
+
+byte getPayload(byte data) {
+  return (data & 7);
+}
+
+
+
+void setupDisplayLoop() {
+  if (CLUSTER == blinkMode) {
+    setColor(BLUE);
+  } else {
+    setColor(GREEN);
+  }
+}
+
+void gameDisplayLoop() {
+
+
+  if (faceValuesVisible) {
+    if (numNeighbours != 2 || CLUSTER==blinkMode) {
+      drawValuesOnFaces(faceValues);
     } else {
-      bool allReset = true;
-      bool anyReset = false;
-      FOREACH_FACE(f) {
-        if (!isValueReceivedOnFaceExpired(f)) {
-          byte val = getLastValueReceivedOnFace(f);
-          if (START_RESET == val || END_RESET == val) {
-            anyReset = true;
-          } else {
-            allReset = false;
-          }
+      setColor(OFF);
+      for (byte i = 0; i < 6; i++) {
+        if (faceMatched[i] == 1) {
+          setColorOnFace(GREEN, i);
+        } else if (faceMatched[i] == 2) {
+          setColorOnFace(RED, i);
         }
       }
-      if (allReset) {
-        mode=MODE_SETUP;
-        setValueSentOnAllFaces(END_RESET);        
-      } else if (anyReset) {
-        setValueSentOnAllFaces(START_RESET);      
-      }
+    }
+  } else {
+    if (PLAYER == blinkMode) {
+      setColor(YELLOW);
+    } else {
+      setColor(GREEN);
     }
   }
-
 }
 
-boolean checkFaceIsValue(byte face, byte value) {
-  if(!isValueReceivedOnFaceExpired(face) && value==getLastValueReceivedOnFace(face)) {
-    return true;
-  }
-  return false;
-}
 
-void drawColors() {
-  FOREACH_FACE(f) {
-    setColorOnFace(colorCycle[f],f);
+
+
+void endRoundDisplayLoop() {
+  if (CLUSTER == blinkMode) {
+    setColor(MAGENTA);
+  } else {
+    setColor(OFF);
+    for (byte i = 0; i < 6; i++) {
+      if (faceMatched[i] == 1) {
+        setColorOnFace(GREEN, i);
+      } else if (faceMatched[i] == 2) {
+        setColorOnFace(RED, i);
+      }
+    }
   }
 }
 
 void drawValuesOnFaces(byte values[]) {
   FOREACH_FACE(f) {
-    setColorOnFace(colorCycle[values[f]],f);
-  }  
-}
-
-void shuffleArray(byte arr[]) {
-  
-  for (int i = 0; i < 5; i++)
-  {
-      int j = random(5);
-  
-      byte t = arr[i];
-      arr[i] = arr[j];
-      arr[j] = t;
-  }
-}
-
-void setupBoard() {
-  mode = MODE_BOARD_READY;
-  shuffleArray(faceValues); //random for now
-  drawValuesOnFaces(faceValues);
-  FOREACH_FACE(f) {
-    setValueSentOnFace(MATCH_SEED + faceValues[f],f);
+    setColorOnFace(colorCycle[values[f]], f);
   }
 }
