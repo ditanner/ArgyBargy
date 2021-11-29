@@ -1,8 +1,11 @@
 # ArgyBargy
 Party Game for Blinks Game System
 
-Once loaded blinks will glow yellow, showing they are in setup mode. Have each player take a single blink (which should change to green). Then remove other blinks until you are left with 4 in a cluster (for a 5+ player round) or 2 connected (for a 3-4 player round). The board blinks should also turn green when in a valid formation.
+Once loaded, blinks will glow blue and green. Arrange some in the center as a cluster (I'd suggest 4) - these will turn blue. Then attach a blink per player to the edges (only connected on one face) - these will glow green.
 
-When ready to begin, click any tile on the board to display the board state. Then players race to click their blinks, look at the board, and find a space they can attach their blink, such that 2 board face colours match 2 on their blink. If they cannot see any spaces that match, they may click their blink again to get a new arrangement.
+When ready to begin, double click a blink. The player ones will display a colour wheel, whilst the cluster will turn green. Players take their blink into their hand, and when everyone is ready, double click a cluster blink to begin.
 
-When they attach the blink, it should change the colour of the unattached faces to green, if a good match, or red if not. Then, any players that didn't get a good match (either because there were no spaces, or because they matched incorrectly) are eliminated. Play restarts by double clicking one of the connected blinks - they should reset to setup mode, and the remaining players start the next round.
+The cluster blinks will display a selection of colours on each face. The players have to attach their blink to 2 cluster blinks, such that the touching faces match colour. If they do, they have won the round, and the cluster will turn purple. Double click to reset.
+
+If no-one matches within 5 seconds, the cluster will randomise, and the game continues.
+
