@@ -72,7 +72,7 @@ void loop() {
     if (SETUP == gameMode) {
       sendData = sendData + numNeighbours;
     } else if (DISPLAY_BOARD == gameMode && faceValuesVisible) {
-      sendData = sendData + faceValues[f];
+      sendData = sendData + faceValues[0];
     }
     setValueSentOnFace(sendData, f);
   }
@@ -283,7 +283,9 @@ void gameDisplayLoop() {
 
 
   if (faceValuesVisible) {
-    if (numNeighbours != 2 || CLUSTER==blinkMode) {
+    if (CLUSTER==blinkMode ) {
+      setColor(colorCycle[faceValues[0]]);
+    } else if (numNeighbours != 2) {
       drawValuesOnFaces(faceValues);
     } else {
       setColor(OFF);
