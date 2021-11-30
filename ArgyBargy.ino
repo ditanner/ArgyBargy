@@ -1,3 +1,4 @@
+
 #include "Serial.h"
 enum signalStates {SETUP, GAME, DISPLAY_BOARD, END_ROUND, INERT, RESOLVE};
 byte signalState = INERT;
@@ -10,14 +11,22 @@ byte faceValues[6] {0, 1, 2, 3, 4, 5};
 bool faceValuesVisible = false;
 const Color colorCycle[6] = {RED, YELLOW, GREEN, CYAN, BLUE, MAGENTA};
 
-byte faceNeighbours[6] {0, 0, 0, 0, 0, 0};
+byte receivedValues[6] {0, 0, 0, 0, 0, 0};
 
 byte numNeighbours = 0;
 ServicePortSerial sp;
 
 byte faceMatched[6] = { 0, 0, 0, 0, 0, 0};
 
+byte myScore = 0;
+
 Timer cycleTimer;
+#define CLUSTERTIME 5000
+#define WINTIME 2000
+#define SCORETIME 2000
+
+bool showScore = false;
+
 
 void setup() {
   randomize();
@@ -28,9 +37,13 @@ void loop() {
 
 
   numNeighbours = 0;
+
   FOREACH_FACE(f) {
     if (!isValueReceivedOnFaceExpired(f)) {//a neighbor!
       numNeighbours++;
+      receivedValues[f] = getPayload(getLastValueReceivedOnFace(f));
+    } else {
+      receivedValues[f] = 7;
     }
   }
 
@@ -67,15 +80,19 @@ void loop() {
   buttonPressed();
 
   byte sendData = 0;
-  FOREACH_FACE(f) {
+
     sendData = (signalState << 3);
     if (SETUP == gameMode) {
       sendData = sendData + numNeighbours;
-    } else if (DISPLAY_BOARD == gameMode && faceValuesVisible) {
-      sendData = sendData + faceValues[0];
+    } else if (CLUSTER==blinkMode) {
+      if (DISPLAY_BOARD == gameMode) {
+        if (faceValuesVisible) {
+          sendData = sendData + faceValues[0];
+        }
+      }
     }
-    setValueSentOnFace(sendData, f);
-  }
+    setValueSentOnAllFaces(sendData);
+
 }
 
 
@@ -107,7 +124,7 @@ void inertLoop() {
               signalState = val;
               gameMode = val;
               faceValuesVisible = true;
-              cycleTimer.set(5000);
+              cycleTimer.set(CLUSTERTIME);
               break;
             case END_ROUND:
               signalState = val;
@@ -116,15 +133,7 @@ void inertLoop() {
               break;
           }
           sendReceived = true;
-        } else {
-          if (SETUP == gameMode) {
-            faceNeighbours[f] = getPayload(getLastValueReceivedOnFace(f));
-          }
-        }
-      } else {
-        if (SETUP == gameMode) {
-          faceNeighbours[f] = 0;
-        }
+        } 
       }
     }
   }
@@ -180,12 +189,13 @@ void setupLoop() {
 void changeModeToGame() {
   signalState = GAME;
   gameMode = GAME;
+  showScore = false;
   for (byte i = 0; i < 6; i++) {
     faceMatched[i] = 0;
-    faceValues[i]=i;
+    faceValues[i] = i;
   }
   if (PLAYER == blinkMode) {
-    faceValuesVisible = true;   
+    faceValuesVisible = true;
   } else {
     shuffleArray(faceValues, sizeof(faceValues));
     faceValuesVisible = false;
@@ -199,10 +209,10 @@ void gameLoop() {
       gameMode = SETUP;
     } else {
       signalState = DISPLAY_BOARD;
-//      if (CLUSTER == blinkMode) {
-        gameMode = DISPLAY_BOARD;
-//      }
-      cycleTimer.set(5000);
+      //      if (CLUSTER == blinkMode) {
+      gameMode = DISPLAY_BOARD;
+      //      }
+      cycleTimer.set(CLUSTERTIME);
       faceValuesVisible = true;
     }
   } else if (GAME == gameMode && PLAYER == blinkMode) {
@@ -227,6 +237,8 @@ void gameLoop() {
     if (2 == foundFaces && 0 == wrongFaces) {
       signalState = END_ROUND;
       gameMode = END_ROUND;
+      cycleTimer.set(WINTIME);
+      myScore++;
     }
 
   }
@@ -238,13 +250,27 @@ void displayBoardLoop() {
     gameMode = SETUP;
   } else if (cycleTimer.isExpired()) {
     shuffleArray(faceValues, sizeof(faceValues));
-    cycleTimer.set(5000);
-  } 
+    cycleTimer.set(CLUSTERTIME);
+  }
 }
 void endRoundLoop() {
-  if (buttonDoubleClicked()) {
-    signalState = SETUP;
-    gameMode = SETUP;
+  if (buttonDoubleClicked() && CLUSTER==blinkMode) {
+    signalState = DISPLAY_BOARD;
+    gameMode = DISPLAY_BOARD;
+    faceValuesVisible = true;
+    cycleTimer.set(CLUSTERTIME);
+  } else {
+    if (cycleTimer.isExpired()) {
+      if (showScore) {
+        if (0==numNeighbours){
+          changeModeToGame();
+          return;
+        }
+      } else {
+        showScore = true;
+        cycleTimer.set(SCORETIME);
+      }
+    }
   }
 }
 
@@ -283,7 +309,7 @@ void gameDisplayLoop() {
 
 
   if (faceValuesVisible) {
-    if (CLUSTER==blinkMode ) {
+    if (CLUSTER == blinkMode ) {
       setColor(colorCycle[faceValues[0]]);
     } else if (numNeighbours != 2) {
       drawValuesOnFaces(faceValues);
@@ -313,13 +339,30 @@ void endRoundDisplayLoop() {
   if (CLUSTER == blinkMode) {
     setColor(MAGENTA);
   } else {
-    setColor(OFF);
-    for (byte i = 0; i < 6; i++) {
-      if (faceMatched[i] == 1) {
-        setColorOnFace(GREEN, i);
-      } else if (faceMatched[i] == 2) {
-        setColorOnFace(RED, i);
-      }
+    if (showScore) {
+      drawPlayerScore();
+    } else {
+      drawPlayerEndRound();
+    }
+  }
+}
+
+void drawPlayerEndRound() {
+  setColor(OFF);
+  for (byte i = 0; i < 6; i++) {
+    if (faceMatched[i] == 1) {
+      setColorOnFace(GREEN, i);
+    } else if (faceMatched[i] == 2) {
+      setColorOnFace(RED, i);
+    }
+  }
+}
+
+void drawPlayerScore() {
+  setColor(OFF);
+  for (byte i = 0; i < 6; i++) {
+    if (i < myScore) {
+      setColorOnFace(YELLOW, i);
     }
   }
 }
