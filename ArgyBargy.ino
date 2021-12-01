@@ -124,6 +124,7 @@ void inertLoop() {
               signalState = val;
               gameMode = val;
               faceValuesVisible = true;
+              shuffleArray(faceValues, sizeof(faceValues));
               cycleTimer.set(CLUSTERTIME);
               break;
             case END_ROUND:
@@ -258,6 +259,7 @@ void endRoundLoop() {
     signalState = DISPLAY_BOARD;
     gameMode = DISPLAY_BOARD;
     faceValuesVisible = true;
+    shuffleArray(faceValues, sizeof(faceValues));
     cycleTimer.set(CLUSTERTIME);
   } else {
     if (cycleTimer.isExpired()) {
